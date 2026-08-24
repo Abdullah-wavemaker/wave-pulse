@@ -5,7 +5,7 @@ import {
     DropdownMenu,
     DropdownItem,
     Button,
-  } from "@nextui-org/react";
+  } from "@heroui/react";
 
 
   export const DropdownComponent = ({allOptions,itemonPressCallback,onSelectionChangecallBack, selectedKeys,selectedValue}:any) => {

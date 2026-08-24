@@ -1,5 +1,7 @@
 import { Channel, Message } from "./channel";
 
+const MAX_BUFFER_SIZE = 400;
+
 export class Agent {
     
     private subscriberMap = new Map<string, Function[]>();
@@ -11,6 +13,7 @@ export class Agent {
         data: any
     }] = [] as any;
     private isFlushing = false;
+    private droppedCount = 0;
 
     constructor(private channel?: Channel) {
         this.setChannel(channel);
@@ -84,6 +87,10 @@ export class Agent {
         return true;
     }
 
+    get droppedEventCount() {
+        return this.droppedCount;
+    }
+
     private processBuffer() {
         if (this.isFlushAllowed() && !this.isFlushing) {
             this.isFlushing = true;
@@ -117,8 +124,9 @@ export class Agent {
                 name: event,
                 data: args
             });
-            if (this.buffer.length > 400) {
+            if (this.buffer.length > MAX_BUFFER_SIZE) {
                 this.buffer.splice(0, 1);
+                this.droppedCount++;
             }
             this.processBuffer();
         } else {

@@ -64,4 +64,18 @@ describe('basic functionality', () => {
         await new Promise(resolve => setTimeout(resolve, 2000));
         expect(o.subscribe).toHaveBeenCalledWith(['first', 'second']);
     });
+
+    it('tracks dropped event count once the buffer exceeds its 400 cap', () => {
+        class BlockedFlushAgent extends Agent {
+            protected isFlushAllowed() {
+                // mirrors WavePulseAgent gating flush on a handshake that never lands
+                return false;
+            }
+        }
+        const agent = new BlockedFlushAgent();
+        for (let i = 0; i < 450; i++) {
+            agent.notify('event-' + i, 'event', [i]);
+        }
+        expect(agent.droppedEventCount).toEqual(50);
+    });
 });

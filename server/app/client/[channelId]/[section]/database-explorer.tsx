@@ -1,7 +1,7 @@
 import { DatabaseIcon, DatabaseTableIcon } from "@/components/icons";
 import { DatabaseInfo } from "@/types";
 import { Button, SelectItem, Table, Textarea } from "@heroui/react";
-import { Select, TableBody, TableCell, TableColumn, TableHeader, TableRow } from "@nextui-org/react";
+import { Select, TableBody, TableCell, TableColumn, TableHeader, TableRow } from "@heroui/react";
 import { useCallback, useEffect, useState } from "react";
 
 export const DatabaseExplorer = ({databases, onExecute}: {

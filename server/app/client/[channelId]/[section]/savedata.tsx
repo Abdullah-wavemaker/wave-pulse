@@ -1,5 +1,5 @@
 import { UIAgentContext } from "@/hooks/hooks";
-import { Modal, ModalHeader, ModalContent, ModalBody, ModalFooter, Button, useDisclosure, Input } from "@nextui-org/react";
+import { Modal, ModalHeader, ModalContent, ModalBody, ModalFooter, Button, useDisclosure, Input } from "@heroui/react";
 import { useCallback, useContext, useEffect, useState } from "react";
 
 export const SaveDataDialog = (props: {

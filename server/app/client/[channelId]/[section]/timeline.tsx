@@ -1,6 +1,6 @@
 import React,{ useCallback, useMemo, useState} from "react";
-import {  Button,Tooltip } from "@nextui-org/react";
-import {  DeleteIcon } from "@nextui-org/shared-icons";
+import {  Button,Tooltip } from "@heroui/react";
+import {  DeleteIcon } from "@heroui/shared-icons";
 import {  TimelineEvent } from "@/types";
 import TimelineRangeSlider from "@/components/timelinerangeslider";
 

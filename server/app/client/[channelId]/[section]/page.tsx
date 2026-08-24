@@ -1,7 +1,7 @@
 "use client";
 
 import { UIAgentContext, useAppConnected, useAppInfo, useComponentTree, useConsole, useDatabases, useLocalStorage, useLocation, useNetworkRequests, usePlatformInfo, useStorageEntries, useTimelineLog } from "@/hooks/hooks";
-import { Tabs, Tab, Button, Input, DropdownMenu, DropdownItem, Dropdown, DropdownTrigger, ButtonGroup } from "@nextui-org/react";
+import { Tabs, Tab, Button, Input, DropdownMenu, DropdownItem, Dropdown, DropdownTrigger, ButtonGroup } from "@heroui/react";
 import { useRouter } from "next/navigation";
 import { useContext, useState, useEffect , useMemo, useCallback} from "react";
 import { Info } from "./info";
@@ -18,7 +18,7 @@ import {BreadcrumbsComponent} from "@/components/breadcrumbs";
 import { TimeLine } from "./timeline";
 import {Session} from './session';
 import QRCode from "react-qr-code";
-import { ChevronDownIcon, Plus, PlusFilledIcon } from "@nextui-org/shared-icons";
+import { ChevronDownIcon, PlusFilledIcon } from "@heroui/shared-icons";
 import { UIAgent } from "@/wavepulse/ui-agent";
 import { DatabaseExplorer } from "./database-explorer";
 
@@ -56,6 +56,7 @@ function PulsePage({ section, refresh, channelId }: { section: string, refresh: 
   const [isSaveDataOpened, setIsSaveDataOpen] = useState(false);
   const [selected, setSelected] = useState(section);
   const [isConnected, setIsConnected] = useState(false);
+  const [droppedCount, setDroppedCount] = useState(0);
   const [selectedWidget, setSelectedWidget] = useState<WidgetNode>(null as any);
   const [breadcrumbData, setBreadcrumbData]=useState<WidgetNode[]>();
   const { showReloadAlert } = useAppConnected();
@@ -76,9 +77,14 @@ function PulsePage({ section, refresh, channelId }: { section: string, refresh: 
   }, [appId, expoUrl, selectedConnectOption[0]]);
 
   useEffect(() => {
-    uiAgent.onConnect(() => {
+    const unsubscribe = uiAgent.onConnect(() => {
       setIsConnected(uiAgent.isConnected);
     });
+    return unsubscribe;
+  }, []);
+  useEffect(() => {
+    const id = setInterval(() => setDroppedCount(uiAgent.droppedEventCount), 3000);
+    return () => clearInterval(id);
   }, []);
   useEffect(() => {
     setIsConnected(!!uiAgent.sessionDataKey);
@@ -310,6 +316,9 @@ function PulsePage({ section, refresh, channelId }: { section: string, refresh: 
           <span className={'text-xs font-bold ' + (uiAgent.isConnected || uiAgent.sessionDataKey ? '' : 'text-red-500')}>
             {uiAgent.isConnected ? 'Connected to device' : (uiAgent.sessionDataKey ? 'Data loaded from : ' + uiAgent.sessionDataKey : 'Waiting for connection...')}
           </span>
+          {droppedCount > 0 && (
+            <span className="text-xs font-bold text-amber-600 ml-2">{droppedCount} events dropped</span>
+          )}
         </div>
         <div className="flex flex-row content-center">
           {uiAgent.isConnected ? (

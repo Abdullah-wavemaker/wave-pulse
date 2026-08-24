@@ -1,5 +1,5 @@
 import { UIAgentContext } from "@/hooks/hooks";
-import { Modal, ModalHeader, ModalContent, ModalBody, ModalFooter, Button, useDisclosure, Select, SelectItem, Switch, Input } from "@nextui-org/react";
+import { Modal, ModalHeader, ModalContent, ModalBody, ModalFooter, Button, useDisclosure, Select, SelectItem, Switch, Input } from "@heroui/react";
 import { useCallback, useContext, useEffect, useState } from "react";
 import {IconImport} from '@/components/icons';
 import axios from "axios";

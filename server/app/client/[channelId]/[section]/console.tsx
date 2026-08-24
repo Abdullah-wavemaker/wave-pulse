@@ -1,6 +1,6 @@
 import React, { useState, useCallback } from "react";
-import { DeleteIcon } from "@nextui-org/shared-icons";
-import {Button} from "@nextui-org/react";
+import { DeleteIcon } from "@heroui/shared-icons";
+import {Button} from "@heroui/react";
 import {Search} from '@/components/search'
 import {DropdownComponent} from '@/components/dropdown'
 import { LogInfo } from "@/types";

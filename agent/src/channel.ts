@@ -36,7 +36,9 @@ export class WebSocketChannel implements Channel {
     }) {
         this.socket = io(url, {path});
         this.channelId = channelId;
-        this.socket.emit('join', {channelId: channelId});
+        this.socket.on('connect', () => {
+            this.socket.emit('join', {channelId: this.channelId});
+        });
         this.socket.on('message', (message: Message) => {
             this.listener && this.listener(message);
         });

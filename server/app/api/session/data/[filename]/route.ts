@@ -1,11 +1,14 @@
 import { tmpdir } from 'node:os';
+import { unlink } from 'node:fs/promises';
 import { streamFile } from "../../../../../wavepulse/zip";
 import { NextRequest } from "next/server";
 
 export async function GET(request: NextRequest, {params}: {params: {filename: string}}) {
-    const zipPath = `${tmpdir}/${params.filename}`;
+    const zipPath = `${tmpdir()}/${params.filename}`;
     const name = request.nextUrl.searchParams.get('name') as string
-    return new Response(streamFile(zipPath), {
+    return new Response(streamFile(zipPath, () => {
+        unlink(zipPath).catch(() => {});
+    }), {
         headers: {
             'Content-Type': 'application/zip',
             'Content-Disposition': `attachment; filename=${name || params.filename}`

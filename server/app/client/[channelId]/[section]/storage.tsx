@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import {Button} from "@nextui-org/react";
+import {Button} from "@heroui/react";
 
 import { KeyValuePair, KeyValueProps } from "@/components/key-pair";
 import { RefreshIcon } from "@/components/icons";

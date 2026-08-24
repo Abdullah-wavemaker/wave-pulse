@@ -5,6 +5,9 @@ import axios from 'axios';
 import { Subject } from 'rxjs';
 
 const WAVEPULSE_SESSION_DATA = 'wavepulse:session_data';
+const WAVEPULSE_LIVE_SESSION_PREFIX = 'wavepulse:live_session:';
+const LIVE_SESSION_PERSIST_DEBOUNCE_MS = 300;
+const HEALTH_CHECK_INTERVAL_MS = 10000;
 
 export class UIAgent extends Agent {
 
@@ -13,13 +16,21 @@ export class UIAgent extends Agent {
     private _sessionData = {} as any;
     private _currentSessionData = {} as any;
     private _sessionDataKey = '';
+    private liveSessionStorageKey = '';
+    private persistTimeoutId: any;
 
     constructor(private wsurl: string,
         private httpurl: string,
         public channelId: string,
         private localStorage: Storage,
         sessionDataKey?: string,) {
-        sessionDataKey = sessionDataKey || localStorage.getItem(WAVEPULSE_SESSION_DATA) || '';
+        // Older builds stored an imported session's key here, origin-wide, which
+        // silently flipped every other open tab into offline mode on its next
+        // reload (nothing writes this anymore - see the removed `sessionDataKey`
+        // setter). Clear any leftover value so a stale entry from a previous
+        // version can't still trigger that on a fresh load.
+        localStorage.removeItem(WAVEPULSE_SESSION_DATA);
+        sessionDataKey = sessionDataKey || '';
         super(sessionDataKey ? {
             send: () => {},
             setListener: () => {}
@@ -30,8 +41,44 @@ export class UIAgent extends Agent {
         }));
         if (!sessionDataKey) {
             this.checkForWavePulseAgent();
+            // Live sessions have no sessionDataKey, so a refresh would otherwise
+            // start every hook from empty state. Cache to sessionStorage (cleared
+            // when the tab closes) and rehydrate here.
+            this.liveSessionStorageKey = WAVEPULSE_LIVE_SESSION_PREFIX + channelId;
+            this._sessionData = this.loadLiveSessionData();
+            this._currentSessionData = this.createPersistingSessionData();
         };
         this._sessionDataKey = sessionDataKey || '';
+    }
+
+    private loadLiveSessionData() {
+        try {
+            const raw = window.sessionStorage.getItem(this.liveSessionStorageKey);
+            return raw ? JSON.parse(raw) : {};
+        } catch (e) {
+            return {};
+        }
+    }
+
+    private createPersistingSessionData() {
+        return new Proxy({} as any, {
+            set: (target, prop, value) => {
+                target[prop as string] = value;
+                this.schedulePersist(target);
+                return true;
+            }
+        });
+    }
+
+    private schedulePersist(data: any) {
+        clearTimeout(this.persistTimeoutId);
+        this.persistTimeoutId = setTimeout(() => {
+            try {
+                window.sessionStorage.setItem(this.liveSessionStorageKey, JSON.stringify(data));
+            } catch (e) {
+                // sessionStorage unavailable/full; live cache is best-effort.
+            }
+        }, LIVE_SESSION_PERSIST_DEBOUNCE_MS);
     }
 
     get sessionData() {
@@ -46,26 +93,23 @@ export class UIAgent extends Agent {
         return this._sessionDataKey;
     }
 
-    set sessionDataKey(k: string) {
-        if (k) {
-            this.localStorage.setItem(WAVEPULSE_SESSION_DATA, k);
-        } else {
-            this.localStorage.removeItem(WAVEPULSE_SESSION_DATA);
-        }
-        if (this.sessionDataKey !== k) {
-            setTimeout(() => window.location.reload(), 100);
-        }
-    }
-
     private async checkForWavePulseAgent() {
         try {
             await this.invoke(CALLS.HANDSHAKE.WISH, [], {
                 timeout: 2000
             });
-            this._isConnected = true;
-            this.connectionSubject.next(this.isConnected);
+            this.setConnected(true);
+            setTimeout(() => this.checkForWavePulseAgent(), HEALTH_CHECK_INTERVAL_MS);
         } catch(e) {
+            this.setConnected(false);
             this.checkForWavePulseAgent();
+        }
+    }
+
+    private setConnected(connected: boolean) {
+        if (this._isConnected !== connected) {
+            this._isConnected = connected;
+            this.connectionSubject.next(this.isConnected);
         }
     }
 
@@ -74,15 +118,9 @@ export class UIAgent extends Agent {
     }
 
     public onConnect(callback : Function) {
-        if (this.isConnected) {
-            callback();
-        }
-        const destroy = this.connectionSubject.subscribe(() => {
-            if(this.isConnected) {
-                callback();
-                destroy.unsubscribe();
-            }
-        });
+        callback();
+        const subscription = this.connectionSubject.subscribe(() => callback());
+        return () => subscription.unsubscribe();
     }
 
     public getWavepulseUrl({appId, expoUrl} : {appId?: string, expoUrl?: string}) {

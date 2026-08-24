@@ -1,5 +1,5 @@
 import { IconBxsDownArrow, IconBxsLeftArrow, RefreshIcon } from "@/components/icons";
-import { Accordion, AccordionItem, Button, Select, SelectItem, Tab, Tabs } from "@nextui-org/react";
+import { Accordion, AccordionItem, Button, Select, SelectItem, Tab, Tabs } from "@heroui/react";
 import { CALLS  } from "@/wavepulse/constants";
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { UIAgentContext } from "@/hooks/hooks";

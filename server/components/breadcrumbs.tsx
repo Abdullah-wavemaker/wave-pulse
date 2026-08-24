@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import {Breadcrumbs, BreadcrumbItem} from "@nextui-org/react";
+import {Breadcrumbs, BreadcrumbItem} from "@heroui/react";
 
 export const BreadcrumbsComponent = (props:any) => {
   const listRef = useRef(null);

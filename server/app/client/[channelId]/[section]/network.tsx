@@ -1,7 +1,7 @@
 import React from "react";
 import { KeyValuePair, KeyValueProps } from "@/components/key-pair";
-import { Accordion, AccordionItem, Button, Tab, Table, Tabs } from "@nextui-org/react";
-import { CloseIcon, DeleteIcon } from "@nextui-org/shared-icons";
+import { Accordion, AccordionItem, Button, Tab, Table, Tabs } from "@heroui/react";
+import { CloseIcon, DeleteIcon } from "@heroui/shared-icons";
 import { NetworkRequest } from "@/types";
 import { useEffect, useState } from "react";
 import {Search} from '@/components/search'

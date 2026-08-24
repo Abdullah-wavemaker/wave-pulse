@@ -1,6 +1,6 @@
 import React, {  memo } from "react";
-import {Input} from "@nextui-org/react";
-import { SearchIcon } from "@nextui-org/shared-icons";
+import {Input} from "@heroui/react";
+import { SearchIcon } from "@heroui/shared-icons";
 
 export const Search = ({onSearchChange,searchTermVal}:any) =>{
     return ( <Input
