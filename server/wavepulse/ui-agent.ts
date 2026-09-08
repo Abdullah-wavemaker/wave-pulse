@@ -81,6 +81,12 @@ export class UIAgent extends Agent {
         }, LIVE_SESSION_PERSIST_DEBOUNCE_MS);
     }
 
+    // Base for this dashboard's own API routes (already includes the /wavepulse
+    // basePath), so callers don't have to reconstruct it from window.location.
+    get apiBaseUrl() {
+        return this.httpurl;
+    }
+
     get sessionData() {
         return this._sessionData;
     }

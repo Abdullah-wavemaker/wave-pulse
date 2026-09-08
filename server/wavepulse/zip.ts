@@ -43,8 +43,8 @@ function iteratorToStream(iterator: any) {
     });
 }
 
-export function streamFile(path: string, onDone?: () => void): ReadableStream {
-    const nodeStream = createReadStream(path);
+export function streamFile(path: string, onDone?: () => void, range?: { start: number; end: number }): ReadableStream {
+    const nodeStream = range ? createReadStream(path, { start: range.start, end: range.end }) : createReadStream(path);
     if (onDone) {
         nodeStream.once('close', onDone);
         nodeStream.once('error', onDone);

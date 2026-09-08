@@ -15,6 +15,12 @@ export const EVENTS = {
     },
     TIMELINE: {
         EVENT: 'timeline-event'
+    },
+    RECORDING: {
+        READY: 'recording-ready'
+    },
+    PERF: {
+        EVENT: 'perf-event'
     }
 };
 
@@ -61,5 +67,10 @@ export const CALLS = {
     },
     LOCALE: {
         GET: 'GET_LOCALE'
+    },
+    RECORDING: {
+        START: 'RECORDING_START',
+        STOP: 'RECORDING_STOP',
+        STATUS: 'RECORDING_STATUS'
     }
 };

@@ -16,6 +16,7 @@ import { ElementTree } from "./element-tree";
 import { WidgetNode } from "@/types";
 import {BreadcrumbsComponent} from "@/components/breadcrumbs";
 import { TimeLine } from "./timeline";
+import { Performance } from "./performance";
 import {Session} from './session';
 import QRCode from "react-qr-code";
 import { ChevronDownIcon, PlusFilledIcon } from "@heroui/shared-icons";
@@ -56,6 +57,9 @@ function PulsePage({ section, refresh, channelId }: { section: string, refresh: 
   const [isSaveDataOpened, setIsSaveDataOpen] = useState(false);
   const [selected, setSelected] = useState(section);
   const [isConnected, setIsConnected] = useState(false);
+  // Whether the server is holding a finished performance session for this
+  // channel, which decides if a disconnect can still show something useful.
+  const [hasStoredSession, setHasStoredSession] = useState(false);
   const [droppedCount, setDroppedCount] = useState(0);
   const [selectedWidget, setSelectedWidget] = useState<WidgetNode>(null as any);
   const [breadcrumbData, setBreadcrumbData]=useState<WidgetNode[]>();
@@ -86,6 +90,18 @@ function PulsePage({ section, refresh, channelId }: { section: string, refresh: 
     const id = setInterval(() => setDroppedCount(uiAgent.droppedEventCount), 3000);
     return () => clearInterval(id);
   }, []);
+  // Re-checked whenever the connection state flips, so a disconnect right after
+  // Stop Recording immediately finds the session that was just saved.
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${uiAgent.apiBaseUrl}/api/session/perf?channelId=${encodeURIComponent(uiAgent.channelId)}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!cancelled) setHasStoredSession(!!data && Array.isArray(data.steps) && data.steps.length > 0);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [uiAgent, isConnected]);
   useEffect(() => {
     setIsConnected(!!uiAgent.sessionDataKey);
   }, [uiAgent.sessionDataKey]);
@@ -159,9 +175,9 @@ function PulsePage({ section, refresh, channelId }: { section: string, refresh: 
           <Tab key="timeline" title="Timeline">
             <TimeLine timelineLogs={timelineLogs} clearTimelineLogs={clearTimelineLogs}></TimeLine>
           </Tab>
-          {/* <Tab key="performance" title="Performance">
-            Performance is under construction.
-          </Tab> */}
+          <Tab key="performance" title="Performance">
+            <Performance></Performance>
+          </Tab>
           <Tab key="storage" title="Storage">
             <Storage data={storage} refreshStorage={refreshStorage}></Storage>
           </Tab>
@@ -177,9 +193,26 @@ function PulsePage({ section, refresh, channelId }: { section: string, refresh: 
           {/* <Tab key="session" title="Session">
             <Session sessionData={sessionDataArr}></Session>
           </Tab> */}
-        </Tabs>) : 
+        </Tabs>) :
         null }
-        {isConnected ? null : (
+        {/* Disconnected but a finished session is stored server-side: keep the
+            Performance tab available so the last recording and its waterfall
+            are still reviewable, instead of dropping straight to the connect
+            screen and appearing to lose everything just captured. Only this one
+            tab, since the live-only panels would just render empty. "Close
+            session" discards the stored data and falls through to connect. */}
+        {!isConnected && hasStoredSession ? (
+          <Tabs aria-label="Last session" radius="none" variant="underlined" classNames={{
+            base: 'w-full flex debug-panel-tabs-list',
+            tabList: 'w-full bg-zinc-300 p-0 border-b-1',
+            tab: 'w-auto',
+          }}>
+            <Tab key="performance" title="Performance (last session)">
+              <Performance onCloseSession={() => setHasStoredSession(false)}></Performance>
+            </Tab>
+          </Tabs>
+        ) : null}
+        {isConnected || hasStoredSession ? null : (
           <div 
             className="flex flex-1 flex-col justify-center content-center items-center flex-wrap">
             <div className="lds-ripple"><div></div><div></div></div>
