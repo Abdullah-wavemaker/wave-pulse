@@ -1,6 +1,6 @@
 "use client";
 import { useRecording, useWaterfallSteps, useStoredPerfSession, WaterfallStep, WaterfallStepKind } from "@/hooks/hooks";
-import { Button, Dropdown, DropdownItem, DropdownMenu, DropdownTrigger } from "@heroui/react";
+import { Button, Dropdown, DropdownItem, DropdownMenu, DropdownTrigger, Switch } from "@heroui/react";
 import { DeleteIcon, ChevronDownIcon } from "@heroui/shared-icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -14,6 +14,13 @@ const KIND_META: Record<WaterfallStepKind, { label: string; badge: string; bar: 
     api: { label: "API Call", badge: "text-green-600 bg-green-200 border-green-600", bar: "border-green-600 bg-green-400" },
 };
 const KIND_ORDER: WaterfallStepKind[] = ["nav", "load", "action", "api"];
+
+// "Slow only" cut-off. 300ms is roughly where a step stops feeling instant to a
+// user, so it's the line between noise and something worth looking at. Applied
+// to the row list (and anything derived from it - print, composite video), but
+// never to the session totals or the time axis: filtering is a lens on the
+// rows, not a redefinition of the session, so bars keep their true positions.
+const SLOW_THRESHOLD_MS = 300;
 
 const UNSUPPORTED_MESSAGES: Record<string, string> = {
     "screen-capture-protected": "This app has screen capture protection enabled, which blocks all screen recording (including WavePulse's) at the OS level - disable it for this build to record.",
@@ -66,9 +73,14 @@ function lastIndexAtOrBefore(steps: WaterfallStep[], ts: number) {
 function drawSessionFrame(o: {
     ctx: CanvasRenderingContext2D; width: number; height: number;
     video: HTMLVideoElement; steps: WaterfallStep[];
+    // The rows drawn are `steps` (possibly filtered); the header totals come
+    // from `totalsSteps` (the whole session) so the exported video's summary
+    // line matches the on-screen one rather than the filter's subset.
+    totalsSteps?: WaterfallStep[];
     startTime: number; totalTime: number; nowTs: number; sessionMs: number;
 }) {
     const { ctx, width, height, video, steps, startTime, totalTime, nowTs, sessionMs } = o;
+    const totalsSteps = o.totalsSteps ?? steps;
     ctx.textBaseline = "top";
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, width, height);
@@ -93,13 +105,13 @@ function drawSessionFrame(o: {
 
     ctx.font = `14px ${SANS}`;
     ctx.fillStyle = "#6b7280";
-    ctx.fillText(`Session ${fmtMs(sessionMs)} · ${steps.length} step${steps.length === 1 ? "" : "s"}`, x0, 56);
+    ctx.fillText(`Session ${fmtMs(sessionMs)} · ${totalsSteps.length} step${totalsSteps.length === 1 ? "" : "s"}`, x0, 56);
 
     let cx = x0;
     const chipY = 82;
     ctx.font = `13px ${SANS}`;
     KIND_ORDER.forEach((k) => {
-        const rows = steps.filter((s) => s.kind === k);
+        const rows = totalsSteps.filter((s) => s.kind === k);
         if (!rows.length) return;
         const text = `${KIND_META[k].label} ${fmtMs(rows.reduce((a, s) => a + s.ms, 0))} (${rows.length})`;
         const tw = ctx.measureText(text).width;
@@ -174,13 +186,26 @@ function drawSessionFrame(o: {
         ctx.fillRect(bx, y + 8, bw, 13);
     }
 
-    // Playhead marking where the video is in the session timeline.
+    // Playhead marking where the video is in the session timeline. It spans the
+    // header plus the rows that were actually drawn - running it to the bottom
+    // of the canvas turned a short session into a red stripe down a page of
+    // empty space, with nothing next to it to relate it to. The cap at the top
+    // is what makes it read as a playhead rather than an unexplained line.
+    const drawnRows = Math.max(Math.min(first + maxRows, steps.length) - first, 0);
+    const playheadBottom = rowsTop + Math.max(drawnRows, 1) * rowH;
     const px = wfX + Math.max(Math.min((nowTs - startTime) / totalTime, 1), 0) * wfW;
+    ctx.fillStyle = "#ef4444";
+    ctx.beginPath();
+    ctx.moveTo(px - 5, headerY - 8);
+    ctx.lineTo(px + 5, headerY - 8);
+    ctx.lineTo(px, headerY);
+    ctx.closePath();
+    ctx.fill();
     ctx.strokeStyle = "#ef4444";
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(px, headerY);
-    ctx.lineTo(px, height - 12);
+    ctx.lineTo(px, playheadBottom);
     ctx.stroke();
     ctx.lineWidth = 1;
 }
@@ -206,8 +231,48 @@ function pickRecorderMime() {
 
 const extForMime = (m: string) => (m.includes("mp4") ? "mp4" : "webm");
 
-const onceEvent = (target: EventTarget, name: string) =>
-    new Promise<void>((res) => target.addEventListener(name, () => res(), { once: true }));
+// Every await in the export used to be an unbounded "wait for this event to
+// maybe happen". If the event never arrived - a stalled load, a seek the
+// browser silently dropped, a video that never reaches `ended` - the export
+// hung on a spinner forever with no error and no file. Each wait now fails
+// loudly instead: an `error` event on the target rejects, and an optional
+// timeout rejects too.
+const onceEvent = (target: EventTarget, name: string, timeoutMs = 0, label = name) =>
+    new Promise<void>((resolve, reject) => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const cleanup = () => {
+            if (timer) clearTimeout(timer);
+            target.removeEventListener(name, onOk);
+            target.removeEventListener("error", onErr);
+        };
+        const onOk = () => { cleanup(); resolve(); };
+        const onErr = () => { cleanup(); reject(new Error(`The recording failed to load while waiting for ${label}.`)); };
+        target.addEventListener(name, onOk, { once: true });
+        target.addEventListener("error", onErr, { once: true });
+        if (timeoutMs > 0) {
+            timer = setTimeout(() => { cleanup(); reject(new Error(`Timed out waiting for ${label}.`)); }, timeoutMs);
+        }
+    });
+
+// `ended` can simply never fire if playback stalls mid-way (a bad range
+// response, a decode hiccup). Watch currentTime instead of trusting the event:
+// if it stops advancing while we think we're playing, give up with a real
+// message rather than hanging.
+const playbackStalled = (video: HTMLVideoElement, done: { finished: boolean }, graceMs = 12000) =>
+    new Promise<never>((_, reject) => {
+        let last = -1;
+        let lastMovedAt = Date.now();
+        const id = setInterval(() => {
+            if (done.finished || video.ended) { clearInterval(id); return; }
+            if (video.currentTime !== last) {
+                last = video.currentTime;
+                lastMovedAt = Date.now();
+            } else if (Date.now() - lastMovedAt > graceMs) {
+                clearInterval(id);
+                reject(new Error(`Playback stalled at ${video.currentTime.toFixed(1)}s - the recording may be incomplete.`));
+            }
+        }, 1000);
+    });
 
 const SessionTotals = ({ steps, sessionMsOverride }: { steps: WaterfallStep[]; sessionMsOverride?: number }) => {
     const totals = useMemo(() => {
@@ -250,6 +315,7 @@ export const Performance = ({ onCloseSession }: { onCloseSession?: () => void } 
     const [isExporting, setIsExporting] = useState(false);
     const [exportError, setExportError] = useState("");
     const [exportProgress, setExportProgress] = useState<{ cur: number; total: number } | null>(null);
+    const [slowOnly, setSlowOnly] = useState(false);
 
     // Once a recording exists, the waterfall is scoped to exactly the recorded
     // window: anything captured before Start Recording, or after the recording
@@ -286,9 +352,30 @@ export const Performance = ({ onCloseSession }: { onCloseSession?: () => void } 
     const visibleSteps = showingStored ? (stored as NonNullable<typeof stored>).steps : liveSteps;
     const viewStart = showingStored ? stored!.startTs : recStart;
     const viewEnd = showingStored ? stored!.endTs : recEnd;
+    // Always address the recording through THIS page's own origin, never the
+    // absolute URL the agent sent back. The agent builds that URL from whatever
+    // host the phone used to reach the server (a LAN IP, a tunnel hostname),
+    // which is a different origin from the dashboard on localhost. Playback
+    // doesn't care - media elements load cross-origin fine - but drawing such a
+    // video onto a canvas TAINTS it, and a tainted canvas makes
+    // captureStream()/MediaRecorder throw SecurityError. That's why the video
+    // showed, seeking worked and the PDF exported, while only "Full session
+    // (video)" failed. recordingId is origin-independent, so build the URL here.
+    const liveRecordingUrl = recording?.recordingId
+        ? `${apiBase}/api/session/recording/${recording.recordingId}`
+        : (recording?.url ?? null);
     const videoUrl = showingStored
         ? (stored!.recordingId ? `${apiBase}/api/session/recording/${stored!.recordingId}` : null)
-        : (recording?.url ?? null);
+        : liveRecordingUrl;
+
+    // What the row list actually renders. Deliberately separate from
+    // visibleSteps: totals and the timeline scale stay anchored to the whole
+    // session so toggling the filter never moves a bar.
+    const displaySteps = useMemo(
+        () => (slowOnly ? visibleSteps.filter((s) => s.ms >= SLOW_THRESHOLD_MS) : visibleSteps),
+        [visibleSteps, slowOnly],
+    );
+    const hiddenCount = visibleSteps.length - displaySteps.length;
 
     const sessionMsOverride = viewStart != null && viewEnd != null ? viewEnd - viewStart : undefined;
 
@@ -394,29 +481,54 @@ export const Performance = ({ onCloseSession }: { onCloseSession?: () => void } 
         let raf = 0;
         let recorder: MediaRecorder | null = null;
         const wasPaused = video.paused;
+        const wasMuted = video.muted;
+        // Capture is driven by requestAnimationFrame, which browsers throttle to
+        // a near-stop in a backgrounded tab. The video keeps playing, so the
+        // export "succeeds" - with a long stretch of one frozen frame in it.
+        // Notice it rather than handing back a quietly broken file.
+        let wentHidden = document.hidden;
+        const onVisibility = () => { if (document.hidden) wentHidden = true; };
+        document.addEventListener("visibilitychange", onVisibility);
         try {
             video.pause();
-            if (video.readyState < 1) await onceEvent(video, "loadedmetadata");
+            // Muted for the duration: this plays the whole recording through at
+            // 1x, and blasting its audio for 20s is not what anyone wants. It
+            // also sidesteps autoplay policy - `play()` on a muted element is
+            // always allowed, whereas an unmuted one can reject with
+            // NotAllowedError if the click's transient activation was already
+            // spent by the dropdown that launched this.
+            video.muted = true;
+            if (video.readyState < 1) await onceEvent(video, "loadedmetadata", 20000, "the recording's metadata");
             if (video.currentTime > 0.01) {
                 video.currentTime = 0;
-                await onceEvent(video, "seeked");
+                await onceEvent(video, "seeked", 15000, "the video to rewind to the start");
             }
 
             const chunks: Blob[] = [];
             const stream = canvas.captureStream(30);
             recorder = new MediaRecorder(stream, { mimeType });
             recorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunks.push(e.data); };
-            const recorderStopped = onceEvent(recorder, "stop");
 
             const total = isFinite(video.duration) ? video.duration : 0;
             let lastSecond = -1;
+            // A throw inside a requestAnimationFrame callback doesn't reach the
+            // try/catch around this function - it just kills the loop. The
+            // canvas then freezes on its last frame while MediaRecorder happily
+            // keeps recording that frozen frame, which is exactly what a
+            // "broken" export looks like. Capture it and surface it instead.
+            let drawError: Error | null = null;
             const draw = () => {
-                const nowTs = (viewStart ?? startTime) + video.currentTime * 1000;
-                drawSessionFrame({
-                    ctx, width: canvas.width, height: canvas.height, video,
-                    steps: visibleSteps, startTime, totalTime, nowTs,
-                    sessionMs: sessionMsOverride ?? totalTime,
-                });
+                try {
+                    const nowTs = (viewStart ?? startTime) + video.currentTime * 1000;
+                    drawSessionFrame({
+                        ctx, width: canvas.width, height: canvas.height, video,
+                        steps: displaySteps, totalsSteps: visibleSteps, startTime, totalTime, nowTs,
+                        sessionMs: sessionMsOverride ?? totalTime,
+                    });
+                } catch (err: any) {
+                    drawError = err instanceof Error ? err : new Error(String(err));
+                    return; // stop the loop; the awaits below will report it
+                }
                 const sec = Math.floor(video.currentTime);
                 if (sec !== lastSecond) {
                     lastSecond = sec;
@@ -431,12 +543,21 @@ export const Performance = ({ onCloseSession }: { onCloseSession?: () => void } 
             draw();
             const ended = onceEvent(video, "ended");
             await video.play();
-            await ended;
+            // Whichever settles first wins: a clean finish, or the stall
+            // watchdog rejecting. Without the race a stalled video meant an
+            // export that never returned.
+            const playback = { finished: false };
+            try {
+                await Promise.race([ended, playbackStalled(video, playback)]);
+            } finally {
+                playback.finished = true;
+            }
+            if (drawError) throw drawError;
 
             cancelAnimationFrame(raf);
             raf = 0;
             recorder.stop();
-            await recorderStopped;
+            await onceEvent(recorder, "stop", 30000, "the recorder to flush");
 
             // Type and extension both come from what the recorder ACTUALLY
             // negotiated - hardcoding "webm" here mislabels an mp4 recording and
@@ -454,12 +575,17 @@ export const Performance = ({ onCloseSession }: { onCloseSession?: () => void } 
             a.click();
             a.remove();
             setTimeout(() => URL.revokeObjectURL(url), 30000);
+            if (wentHidden) {
+                setExportError("Export finished, but this tab was in the background part of the time - those seconds will show a frozen frame. Re-export with the tab visible for a clean capture.");
+            }
         } catch (e: any) {
             setExportError(e?.message || "Export failed.");
         } finally {
             if (raf) cancelAnimationFrame(raf);
             try { if (recorder && recorder.state !== "inactive") recorder.stop(); } catch {}
+            document.removeEventListener("visibilitychange", onVisibility);
             if (wasPaused) video.pause();
+            video.muted = wasMuted;
             setIsExporting(false);
             setExportProgress(null);
         }
@@ -493,7 +619,8 @@ export const Performance = ({ onCloseSession }: { onCloseSession?: () => void } 
                 <div className="text-xs text-gray-500">
                     Generated {new Date().toLocaleString()}
                     {sessionMsOverride != null ? ` · Recorded session ${fmtMs(sessionMsOverride)}` : ""}
-                    {` · ${visibleSteps.length} step${visibleSteps.length === 1 ? "" : "s"}`}
+                    {` · ${displaySteps.length} step${displaySteps.length === 1 ? "" : "s"}`}
+                    {slowOnly ? ` (showing only steps over ${SLOW_THRESHOLD_MS}ms)` : ""}
                 </div>
             </div>
             <div className="w-2/5 h-full flex flex-col gap-3 overflow-hidden p-4 border-r wp-perf-left">
@@ -611,6 +738,24 @@ export const Performance = ({ onCloseSession }: { onCloseSession?: () => void } 
                         </div>
                     )}
                     <SessionTotals steps={visibleSteps} sessionMsOverride={sessionMsOverride} />
+                    {visibleSteps.length > 0 && (
+                        <div className="flex items-center gap-2 px-4 py-1.5 border-b bg-white">
+                            <Switch
+                                size="sm"
+                                isSelected={slowOnly}
+                                onValueChange={setSlowOnly}
+                                classNames={{ label: "text-xs text-color" }}
+                                className="wp-no-print"
+                            >
+                                {`Slow steps only (over ${SLOW_THRESHOLD_MS}ms)`}
+                            </Switch>
+                            {slowOnly && (
+                                <span className="text-xs text-gray-500">
+                                    {`${displaySteps.length} of ${visibleSteps.length} shown · ${hiddenCount} under ${SLOW_THRESHOLD_MS}ms hidden`}
+                                </span>
+                            )}
+                        </div>
+                    )}
                     <div className="flex flex-row border border-x-0 px-4 py-1 w-full bg-zinc-100">
                         <div className="flex-shrink-0 text-xs text-color w-3/12 font-bold">Name</div>
                         <div className="flex-shrink-0 px-2 text-xs w-2/12 font-bold">Type</div>
@@ -623,7 +768,12 @@ export const Performance = ({ onCloseSession }: { onCloseSession?: () => void } 
                         No page loads, navigations, business logic, or API calls captured yet - navigate or interact with the connected app to see them here.
                     </div>
                 )}
-                {visibleSteps.map((s, i) => {
+                {visibleSteps.length > 0 && displaySteps.length === 0 && (
+                    <div className="p-4 text-xs text-gray-400">
+                        {`Nothing took longer than ${SLOW_THRESHOLD_MS}ms in this session - turn off "Slow steps only" to see all ${visibleSteps.length} steps.`}
+                    </div>
+                )}
+                {displaySteps.map((s, i) => {
                     const meta = KIND_META[s.kind];
                     // Clip to the visible window rather than letting a step that
                     // straddles either edge draw outside the Waterfall column.
@@ -642,7 +792,7 @@ export const Performance = ({ onCloseSession }: { onCloseSession?: () => void } 
                                 + (active ? "bg-amber-100 border-l-2 border-l-amber-500 " : (i % 2 ? "bg-zinc-50/50 " : ""))
                             }
                             title={seekable ? `${s.detail} — click to jump the video here` : s.detail}
-                            onClick={() => seekable && seekToStep(s)}
+                            onClick={() => seekable && !isExporting && seekToStep(s)}
                         >
                             <div className="flex-shrink-0 text-xs text-color w-3/12 truncate">{s.label}</div>
                             <div className="flex-shrink-0 px-0 w-2/12">
